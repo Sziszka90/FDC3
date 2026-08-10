@@ -19,6 +19,10 @@ export const getLogMessage = (name: logMessagesName, type: logMessagesType, valu
       success: `Retrieved current channel [${value}]`,
       error: `Failed to retrieve current channel`,
     },
+    userChannelChanged: {
+      info: `User channel changed to [${value}]`,
+      error: `Failed to process user channel change`,
+    },
     joinUserChannel: {
       success: `Joined the [${value}] channel`,
       error: `Failed to join the [${value}] channel`,

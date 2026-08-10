@@ -31,8 +31,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   * READMEs, Glossary entries and an API spec introduction for securing inter-app communication.
 * Added engines restriction to all package.json files requiring at least node 22 for all packages. ([#1926](https://github.com/finos/FDC3/pull/1926))
 * Added labels and tooltips to dropdowns in the FDC3 for Web reference implementation demo. ([#193](https://github.com/finos/FDC3/pull/1932))
-
 * Added `fdc3.close()` API call allowing an app to request that its own window or frame be closed, with `closeRequest`/`closeResponse` DACP messages and `CloseError` enumeration ([#1918](https://github.com/finos/FDC3/pull/1918))
+* Added FDC3 event-listening support to the Workbench User Channels and Private Channels tabs, including event examples, system-log reporting, and compatibility with legacy FDC3 channel event APIs. ([#1674](https://github.com/finos/FDC3/issues/1674))
 
 ### Changed
 
