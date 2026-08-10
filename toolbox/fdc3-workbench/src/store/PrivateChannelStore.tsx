@@ -8,11 +8,26 @@ import systemLogStore from './SystemLogStore.js';
 import { nanoid } from 'nanoid';
 import { getWorkbenchAgent } from '../utility/Fdc3Api.js';
 import { ContextMetadata } from '@finos/fdc3-standard';
+import { Listener } from '@finos/fdc3';
 // interface ListenerOptionType {
 // 	title: string;
 // 	value: string;
 // 	type: string | undefined;
 // }
+
+type PrivateChannelEventType = 'addContextListener' | 'unsubscribe' | 'disconnect';
+type PrivateChannelEventHandler = Parameters<PrivateChannel['addEventListener']>[1];
+type LegacyPrivateChannel = PrivateChannel & {
+  onAddContextListener?: (handler: (contextType?: string) => void) => Listener;
+  onUnsubscribe?: (handler: (contextType?: string) => void) => Listener;
+  onDisconnect?: (handler: () => void) => Listener;
+};
+
+interface PrivateChannelEventListener {
+  channelId: string;
+  eventType: PrivateChannelEventType;
+  listener: Listener;
+}
 
 class PrivateChannelStore {
   privateChannelsList: PrivateChannel[] = [];
@@ -21,17 +36,78 @@ class PrivateChannelStore {
 
   channelListeners: Fdc3Listener[] = [];
 
+  eventListeners: PrivateChannelEventListener[] = [];
+
   constructor() {
     makeObservable(this, {
       privateChannelsList: observable,
       currentPrivateChannel: observable,
       channelListeners: observable,
+      eventListeners: observable,
       createPrivateChannel: action,
       broadcast: action,
       onAddContextListener: action,
       onDisconnect: action,
       onUnsubscribe: action,
       disconnect: action,
+    });
+  }
+
+  private async registerEventListener(
+    channel: PrivateChannel,
+    eventType: PrivateChannelEventType,
+    handler: PrivateChannelEventHandler
+  ) {
+    const existingListener = this.eventListeners.find(
+      listener => listener.channelId === channel.id && listener.eventType === eventType
+    );
+    if (existingListener) {
+      return;
+    }
+
+    const legacyChannel = channel as LegacyPrivateChannel;
+    let listener: Listener;
+
+    if (typeof channel.addEventListener === 'function') {
+      listener = await channel.addEventListener(eventType, handler);
+    } else if (eventType === 'addContextListener' && legacyChannel.onAddContextListener) {
+      listener = legacyChannel.onAddContextListener(contextType =>
+        handler({ type: eventType, details: { contextType: contextType ?? null } })
+      );
+    } else if (eventType === 'unsubscribe' && legacyChannel.onUnsubscribe) {
+      listener = legacyChannel.onUnsubscribe(contextType =>
+        handler({ type: eventType, details: { contextType: contextType ?? null } })
+      );
+    } else if (eventType === 'disconnect' && legacyChannel.onDisconnect) {
+      listener = legacyChannel.onDisconnect(() => handler({ type: eventType, details: null }));
+    } else {
+      throw new Error(`Private channel does not support ${eventType} events`);
+    }
+
+    runInAction(() => {
+      this.eventListeners.push({
+        channelId: channel.id,
+        eventType,
+        listener,
+      });
+    });
+  }
+
+  private async removeEventListeners(channelId: string) {
+    const listeners = this.eventListeners.filter(listener => listener.channelId === channelId);
+
+    await Promise.all(
+      listeners.map(async ({ listener }) => {
+        try {
+          await listener.unsubscribe();
+        } catch {
+          // The channel may already be disconnected.
+        }
+      })
+    );
+
+    runInAction(() => {
+      this.eventListeners = this.eventListeners.filter(listener => listener.channelId !== channelId);
     });
   }
 
@@ -189,83 +265,125 @@ class PrivateChannelStore {
     }
   }
 
-  onAddContextListener(
+  async onAddContextListener(
     channel: PrivateChannel,
     channelContexts?: Record<string, ContextType>,
     channelContextDelay?: Record<string, number>
   ) {
-    channel.addEventListener('addContextListener', () => {
-      try {
-        systemLogStore.addLog({
-          name: 'pcAddContextListener',
-          type: 'success',
-          value: `A context listener for '[all]' has been added on channel [${channel.id}]`,
-        });
+    try {
+      await this.registerEventListener(channel, 'addContextListener', event => {
+        try {
+          const contextType = event.details.contextType;
+          const contextTypeLabel = contextType ?? '[all]';
 
-        if (channelContexts && Object.keys(channelContexts).length !== 0) {
-          Object.keys(channelContexts).forEach(key => {
-            const broadcast = setTimeout(async () => {
-              this.broadcast(channel, channelContexts[key]);
-              clearTimeout(broadcast);
-            }, channelContextDelay?.[key] ?? 0);
+          systemLogStore.addLog({
+            name: 'pcAddContextListener',
+            type: 'success',
+            value: `A context listener for '${contextTypeLabel}' has been added on channel [${channel.id}]`,
+          });
+
+          if (channelContexts && Object.keys(channelContexts).length !== 0) {
+            Object.entries(channelContexts)
+              .filter(([, context]) => contextType === null || context.type === contextType)
+              .forEach(([key, context]) => {
+                const broadcast = setTimeout(async () => {
+                  this.broadcast(channel, context);
+                  clearTimeout(broadcast);
+                }, channelContextDelay?.[key] ?? 0);
+              });
+          }
+        } catch {
+          systemLogStore.addLog({
+            name: 'pcAddContextListener',
+            type: 'error',
+            value: `Failed to add a context listener on channel [${channel.id}]`,
           });
         }
-      } catch {
-        systemLogStore.addLog({
-          name: 'pcAddContextListener',
-          type: 'error',
-          value: `Failed to add a context listener for '[all]' on channel [${channel.id}]`,
-        });
-      }
-    });
+      });
+    } catch {
+      systemLogStore.addLog({
+        name: 'pcAddContextListener',
+        type: 'error',
+        value: `Failed to register addContextListener events on channel [${channel.id}]`,
+      });
+    }
   }
 
-  onUnsubscribe(channel: PrivateChannel) {
-    channel.addEventListener('unsubscribe', () => {
-      try {
-        systemLogStore.addLog({
-          name: 'pcOnUnsubscribe',
-          type: 'success',
-          value: `Sucessfully unsubscribed from listener '[all]' for channel [${channel.id}]`,
-        });
-      } catch {
-        systemLogStore.addLog({
-          name: 'pcOnUnsubscribe',
-          type: 'error',
-          value: `Could not unsubscribed listener '[all]' from channel [${channel.id}]`,
-        });
-      }
-    });
+  async onUnsubscribe(channel: PrivateChannel) {
+    try {
+      await this.registerEventListener(channel, 'unsubscribe', event => {
+        try {
+          const contextType = event.details.contextType;
+          const contextTypeLabel = contextType ?? '[all]';
+
+          systemLogStore.addLog({
+            name: 'pcOnUnsubscribe',
+            type: 'success',
+            value: `Successfully unsubscribed from listener '${contextTypeLabel}' for channel [${channel.id}]`,
+          });
+        } catch {
+          systemLogStore.addLog({
+            name: 'pcOnUnsubscribe',
+            type: 'error',
+            value: `Could not unsubscribe listener from channel [${channel.id}]`,
+          });
+        }
+      });
+    } catch {
+      systemLogStore.addLog({
+        name: 'pcOnUnsubscribe',
+        type: 'error',
+        value: `Failed to register unsubscribe events on channel [${channel.id}]`,
+      });
+    }
   }
 
-  onDisconnect(channel: PrivateChannel) {
-    channel.addEventListener('disconnect', () => {
-      try {
-        this.channelListeners.forEach(listener => {
-          this.removeContextListener(listener.id);
-        });
-        this.privateChannelsList = this.privateChannelsList.filter(chan => chan.id !== channel.id);
-        systemLogStore.addLog({
-          name: 'pcOnDisconnect',
-          type: 'success',
-          value: `Sucessfully disconntected from channel [${channel.id}]`,
-        });
-      } catch {
-        systemLogStore.addLog({
-          name: 'pcOnDisconnect',
-          type: 'error',
-          value: `Unable to disconnect from channel [${channel.id}]`,
-        });
-      }
-    });
+  async onDisconnect(channel: PrivateChannel) {
+    try {
+      await this.registerEventListener(channel, 'disconnect', async () => {
+        try {
+          this.channelListeners
+            .filter(listener => listener.channelId === channel.id)
+            .forEach(listener => {
+              this.removeContextListener(listener.id);
+            });
+          await this.removeEventListeners(channel.id);
+          runInAction(() => {
+            this.privateChannelsList = this.privateChannelsList.filter(chan => chan.id !== channel.id);
+          });
+          systemLogStore.addLog({
+            name: 'pcOnDisconnect',
+            type: 'success',
+            value: `Successfully disconnected from channel [${channel.id}]`,
+          });
+        } catch {
+          systemLogStore.addLog({
+            name: 'pcOnDisconnect',
+            type: 'error',
+            value: `Unable to disconnect from channel [${channel.id}]`,
+          });
+        }
+      });
+    } catch {
+      systemLogStore.addLog({
+        name: 'pcOnDisconnect',
+        type: 'error',
+        value: `Failed to register disconnect events on channel [${channel.id}]`,
+      });
+    }
   }
 
-  disconnect(channel: PrivateChannel) {
-    this.channelListeners.forEach(listener => {
-      this.removeContextListener(listener.id);
+  async disconnect(channel: PrivateChannel) {
+    this.channelListeners
+      .filter(listener => listener.channelId === channel.id)
+      .forEach(listener => {
+        this.removeContextListener(listener.id);
+      });
+    await this.removeEventListeners(channel.id);
+    runInAction(() => {
+      this.privateChannelsList = this.privateChannelsList.filter(chan => chan.id !== channel.id);
     });
-    this.privateChannelsList = this.privateChannelsList.filter(chan => chan.id !== channel.id);
-    channel.disconnect();
+    await channel.disconnect();
   }
 }
 

@@ -225,6 +225,10 @@ export const ChannelField = observer(
       <div style={{ marginTop: 16 }}>
         {currentChannelList.length > 0 &&
           currentChannelList.map(channel => {
+            const privateChannelEventExample =
+              isPrivateChannel && typeof (channel.channel as PrivateChannel).addEventListener === 'function'
+                ? codeExamples.privateChannelEventListeners
+                : codeExamples.legacyPrivateChannelEventListeners;
             const element = (
               <Grid container key={channel.id} sx={styles.spread}>
                 <Grid item sx={styles.field}>
@@ -327,7 +331,10 @@ export const ChannelField = observer(
                         size="small"
                         aria-label="Copy code example"
                         color="primary"
-                        onClick={copyToClipboard(codeExamples.appChannelContextListener, 'addAppContextListener')}
+                        onClick={copyToClipboard(
+                          isPrivateChannel ? privateChannelEventExample : codeExamples.appChannelContextListener,
+                          isPrivateChannel ? 'privateChannelEventListeners' : 'addAppContextListener'
+                        )}
                       >
                         <FileCopyIcon />
                       </IconButton>
@@ -335,7 +342,11 @@ export const ChannelField = observer(
                     <Link
                       onClick={openApiDocsLink}
                       target="FDC3APIDocs"
-                      href="https://fdc3.finos.org/docs/api/ref/Channel#addcontextlistener"
+                      href={
+                        isPrivateChannel
+                          ? 'https://fdc3.finos.org/docs/api/ref/PrivateChannel#addeventlistener'
+                          : 'https://fdc3.finos.org/docs/api/ref/Channel#addcontextlistener'
+                      }
                     >
                       <InfoOutlinedIcon />
                     </Link>

@@ -17,6 +17,11 @@ let current = await fdc3.getCurrentChannel();
 //leave the current channel\nawait fdc3.leaveCurrentChannel();
 //the fdc3Listener will now cease receiving context`,
 
+  userChannelChanged: `const listener = await fdc3.addEventListener('userChannelChanged', event => {
+  const currentChannelId = event.details.currentChannelId;
+  console.log('Current user channel:', currentChannelId);
+});`,
+
   broadcast: `const instrument = {
     type: 'fdc3.instrument',
     id: {
@@ -37,7 +42,7 @@ appChannel.broadcast(instrument);`,
 
   raiseIntent: (context: string, intent: string) =>
     `//Raise an intent with a specified context
-let context = ${context !== 'null' ? context : '{type: "fdc3.instrument", name: "Tesla, inc.", id: {ticker: "TSLA"}}'}; 
+let context = ${context !== 'null' ? context : '{type: "fdc3.instrument", name: "Tesla, inc.", id: {ticker: "TSLA"}}'};
 fdc3.raiseIntent("${intent !== 'null' ? intent : 'ViewChart'}", context);`,
 
   raiseIntentTarget: (context: string, intent: string) =>
@@ -76,6 +81,30 @@ const listener = appChannel.addContextListener(null, context => {
 // listener for a specific type
 const contactListener = appChannel.addContextListener('fdc3.contact', contact => {
     //add context handling code here
+});`,
+
+  privateChannelEventListeners: `const addListenerEvent = await channel.addEventListener('addContextListener', event => {
+  console.log('Listener added for:', event.details.contextType ?? '[all]');
+});
+
+const unsubscribeEvent = await channel.addEventListener('unsubscribe', event => {
+  console.log('Listener removed for:', event.details.contextType ?? '[all]');
+});
+
+const disconnectEvent = await channel.addEventListener('disconnect', () => {
+  console.log('Remote application disconnected');
+});`,
+
+  legacyPrivateChannelEventListeners: `const addContextListener = channel.onAddContextListener(contextType => {
+  console.log('Listener added for:', contextType ?? '[all]');
+});
+
+const unsubscribeListener = channel.onUnsubscribe(contextType => {
+  console.log('Listener removed for:', contextType ?? '[all]');
+});
+
+const disconnectListener = channel.onDisconnect(() => {
+  console.log('Remote application disconnected');
 });`,
 
   intentListener: `const listener = fdc3.addIntentListener('StartChat', context => {

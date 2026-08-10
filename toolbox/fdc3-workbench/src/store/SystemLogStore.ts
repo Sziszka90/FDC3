@@ -11,6 +11,7 @@ export type logMessagesName =
   | 'getFdc3'
   | 'getChannels'
   | 'getCurrentChannel'
+  | 'userChannelChanged'
   | 'joinUserChannel'
   | 'leaveChannel'
   | 'broadcast'

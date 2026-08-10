@@ -4,7 +4,7 @@
  */
 import { makeObservable, observable, action, runInAction } from 'mobx';
 import systemLogStore from './SystemLogStore.js';
-import { Channel } from '@finos/fdc3';
+import { Channel, Listener } from '@finos/fdc3';
 import { getWorkbenchAgent } from '../utility/Fdc3Api.js';
 
 class ChannelStore {
@@ -12,10 +12,13 @@ class ChannelStore {
 
   currentUserChannel: Channel | null = null;
 
+  userChannelChangedListener: Listener | null = null;
+
   constructor() {
     makeObservable(this, {
       userChannels: observable,
       currentUserChannel: observable,
+      userChannelChangedListener: observable,
       getUserChannels: action,
       joinUserChannel: action,
       leaveUserChannel: action,
@@ -54,7 +57,55 @@ class ChannelStore {
     const agent = await getWorkbenchAgent();
     //defer retrieving channels until fdc3 API is ready
     try {
-      const userChannels: Channel[] = await agent.getUserChannels();
+      const legacyAgent = agent as typeof agent & {
+        getSystemChannels?: () => Promise<Channel[]>;
+      };
+      if (!this.userChannelChangedListener && typeof agent.addEventListener === 'function') {
+        try {
+          this.userChannelChangedListener = await agent.addEventListener('userChannelChanged', async event => {
+            try {
+              const currentChannelId = event.details.currentChannelId;
+              const changedUserChannel = currentChannelId
+                ? (this.userChannels.find(channel => channel.id === currentChannelId) ??
+                  (await agent.getCurrentChannel()))
+                : null;
+
+              runInAction(() => {
+                systemLogStore.addLog({
+                  name: 'userChannelChanged',
+                  type: 'info',
+                  value: currentChannelId ?? 'none',
+                  variant: 'text',
+                });
+                this.currentUserChannel = changedUserChannel;
+              });
+            } catch (e) {
+              systemLogStore.addLog({
+                name: 'userChannelChanged',
+                type: 'error',
+                body: (e as Error).message ?? (e as string),
+                variant: 'text',
+              });
+            }
+          });
+        } catch (e) {
+          systemLogStore.addLog({
+            name: 'userChannelChanged',
+            type: 'error',
+            body: (e as Error).message ?? (e as string),
+            variant: 'text',
+          });
+        }
+      }
+
+      const userChannels: Channel[] =
+        typeof agent.getUserChannels === 'function'
+          ? await agent.getUserChannels()
+          : legacyAgent.getSystemChannels
+            ? await legacyAgent.getSystemChannels()
+            : (() => {
+                throw new Error('The Desktop Agent does not support User or System Channels');
+              })();
       const currentUserChannel = await agent.getCurrentChannel();
 
       runInAction(() => {
@@ -79,19 +130,33 @@ class ChannelStore {
   async joinUserChannel(channelId: string) {
     const agent = await getWorkbenchAgent();
     try {
-      await agent.joinUserChannel(channelId);
+      const legacyAgent = agent as typeof agent & {
+        joinChannel?: (channelId: string) => Promise<void>;
+      };
+      if (typeof agent.joinUserChannel === 'function') {
+        await agent.joinUserChannel(channelId);
+      } else if (legacyAgent.joinChannel) {
+        await legacyAgent.joinChannel(channelId);
+      } else {
+        throw new Error('The Desktop Agent does not support joining User or System Channels');
+      }
+      let isSuccess = true;
 
-      const currentUserChannel = await agent.getCurrentChannel();
-      const isSuccess = currentUserChannel !== null;
+      if (!this.userChannelChangedListener) {
+        const currentUserChannel = await agent.getCurrentChannel();
+        isSuccess = currentUserChannel !== null;
+        runInAction(() => {
+          this.currentUserChannel = currentUserChannel;
+        });
+      }
 
       runInAction(() => {
         systemLogStore.addLog({
           name: 'joinUserChannel',
           type: isSuccess ? 'success' : 'error',
-          value: isSuccess ? currentUserChannel?.id : channelId,
+          value: isSuccess ? this.currentUserChannel?.id : channelId,
           variant: 'text',
         });
-        this.currentUserChannel = currentUserChannel;
       });
     } catch (e) {
       systemLogStore.addLog({
@@ -108,7 +173,7 @@ class ChannelStore {
     const agent = await getWorkbenchAgent();
     try {
       //check that we're on a channel
-      let currentUserChannel = await agent.getCurrentChannel();
+      const currentUserChannel = this.currentUserChannel;
       if (!currentUserChannel) {
         systemLogStore.addLog({
           name: 'leaveChannel',
@@ -118,20 +183,24 @@ class ChannelStore {
         });
       } else {
         await agent.leaveCurrentChannel();
-        currentUserChannel = await agent.getCurrentChannel();
-        const isSuccess = currentUserChannel === null;
+        let isSuccess = true;
+
+        if (!this.userChannelChangedListener) {
+          const updatedUserChannel = await agent.getCurrentChannel();
+          isSuccess = updatedUserChannel === null;
+
+          runInAction(() => {
+            this.currentUserChannel = updatedUserChannel;
+          });
+        }
 
         runInAction(() => {
           systemLogStore.addLog({
             name: 'leaveChannel',
             type: isSuccess ? 'success' : 'error',
-            value: this.currentUserChannel?.id,
+            value: currentUserChannel.id,
             variant: 'text',
           });
-
-          if (isSuccess) {
-            this.currentUserChannel = null;
-          }
         });
       }
     } catch (e) {

@@ -161,6 +161,19 @@ export const Channels = observer(
                 </Tooltip>
               </Grid>
               <Grid item sx={styles.controls}>
+                <Tooltip title="Copy user channel event example" aria-label="Copy user channel event example">
+                  <IconButton
+                    size="small"
+                    aria-label="Copy user channel event example"
+                    color="primary"
+                    disabled={!channelStore.userChannelChangedListener}
+                    onClick={copyToClipboard(codeExamples.userChannelChanged, 'userChannelChanged')}
+                  >
+                    <FileCopyIcon />
+                  </IconButton>
+                </Tooltip>
+              </Grid>
+              <Grid item sx={styles.controls}>
                 <Link
                   onClick={openApiDocsLink}
                   target="FDC3APIDocs"
